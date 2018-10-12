@@ -438,13 +438,13 @@ func SetIgnoreErrors(errs ...string) error {
 
 // SetDSN updates a client with a new DSN. It safe to call after and
 // concurrently with calls to Report and Send.
-func (c *Client) SetDSN(dsn string) error {
+func (client *Client) SetDSN(dsn string) error {
 	if dsn == "" {
 		return nil
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	client.mu.Lock()
+	defer client.mu.Unlock()
 
 	uri, err := url.Parse(dsn)
 	if err != nil {
@@ -459,19 +459,19 @@ func (c *Client) SetDSN(dsn string) error {
 	uri.User = nil
 
 	if idx := strings.LastIndex(uri.Path, "/"); idx != -1 {
-		c.projectID = uri.Path[idx+1:]
-		uri.Path = uri.Path[:idx+1] + "api/" + c.projectID + "/store/"
+		client.projectID = uri.Path[idx+1:]
+		uri.Path = uri.Path[:idx+1] + "api/" + client.projectID + "/store/"
 	}
-	if c.projectID == "" {
+	if client.projectID == "" {
 		return ErrMissingProjectID
 	}
 
-	c.url = uri.String()
+	client.url = uri.String()
 
 	if hasSecretKey {
-		c.authHeader = fmt.Sprintf("Sentry sentry_version=4, sentry_key=%s, sentry_secret=%s", publicKey, secretKey)
+		client.authHeader = fmt.Sprintf("Sentry sentry_version=4, sentry_key=%s, sentry_secret=%s", publicKey, secretKey)
 	} else {
-		c.authHeader = fmt.Sprintf("Sentry sentry_version=4, sentry_key=%s", publicKey)
+		client.authHeader = fmt.Sprintf("Sentry sentry_version=4, sentry_key=%s", publicKey)
 	}
 
 	return nil
@@ -481,35 +481,35 @@ func (c *Client) SetDSN(dsn string) error {
 func SetDSN(dsn string) error { return DefaultClient.SetDSN(dsn) }
 
 // SetRelease sets the "release" tag.
-func (c *Client) SetRelease(release string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.release = release
+func (client *Client) SetRelease(release string) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	client.release = release
 }
 
 // SetEnvironment sets the "environment" tag.
-func (c *Client) SetEnvironment(environment string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.environment = environment
+func (client *Client) SetEnvironment(environment string) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	client.environment = environment
 }
 
 // SetDefaultLoggerName sets the default logger name.
-func (c *Client) SetDefaultLoggerName(name string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.defaultLoggerName = name
+func (client *Client) SetDefaultLoggerName(name string) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	client.defaultLoggerName = name
 }
 
 // SetSampleRate sets how much sampling we want on client side
-func (c *Client) SetSampleRate(rate float32) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (client *Client) SetSampleRate(rate float32) error {
+	client.mu.Lock()
+	defer client.mu.Unlock()
 
 	if rate < 0 || rate > 1 {
 		return ErrInvalidSampleRate
 	}
-	c.sampleRate = rate
+	client.sampleRate = rate
 	return nil
 }
 
@@ -527,31 +527,31 @@ func SetDefaultLoggerName(name string) {
 // SetSampleRate sets the "sample rate" on the degault *Client
 func SetSampleRate(rate float32) error { return DefaultClient.SetSampleRate(rate) }
 
-func (c *Client) worker() {
-	for outgoingPacket := range c.queue {
+func (client *Client) worker() {
+	for outgoingPacket := range client.queue {
 
-		c.mu.RLock()
-		url, authHeader := c.url, c.authHeader
-		c.mu.RUnlock()
+		client.mu.RLock()
+		url, authHeader := client.url, client.authHeader
+		client.mu.RUnlock()
 
-		outgoingPacket.ch <- c.Transport.Send(url, authHeader, outgoingPacket.packet)
-		c.wg.Done()
+		outgoingPacket.ch <- client.Transport.Send(url, authHeader, outgoingPacket.packet)
+		client.wg.Done()
 	}
 }
 
 // Capture asynchronously delivers a packet to the Sentry server. It is a no-op
 // when client is nil. A channel is provided if it is important to check for a
 // send's success.
-func (c *Client) Capture(packet *Packet, captureTags map[string]string) (eventID string, ch chan error) {
+func (client *Client) Capture(packet *Packet, captureTags map[string]string) (eventID string, ch chan error) {
 	ch = make(chan error, 1)
 
-	if c == nil {
+	if client == nil {
 		// return a chan that always returns nil when the caller receives from it
 		close(ch)
 		return
 	}
 
-	if c.sampleRate < 1.0 && mrand.Float32() > c.sampleRate {
+	if client.sampleRate < 1.0 && mrand.Float32() > client.sampleRate {
 		return
 	}
 
@@ -560,27 +560,27 @@ func (c *Client) Capture(packet *Packet, captureTags map[string]string) (eventID
 		return
 	}
 
-	if c.shouldExcludeErr(packet.Message) {
+	if client.shouldExcludeErr(packet.Message) {
 		return
 	}
 
 	// Keep track of all running Captures so that we can wait for them all to finish
-	// *Must* call c.wg.Done() on any path that indicates that an event was
+	// *Must* call client.wg.Done() on any path that indicates that an event was
 	// finished being acted upon, whether success or failure
-	c.wg.Add(1)
+	client.wg.Add(1)
 
-	// Merge capture tags and c tags
+	// Merge capture tags and client tags
 	packet.AddTags(captureTags)
-	packet.AddTags(c.Tags)
+	packet.AddTags(client.Tags)
 
 	// Initialize any required packet fields
-	c.mu.RLock()
-	packet.AddTags(c.context.tags)
-	projectID := c.projectID
-	release := c.release
-	environment := c.environment
-	defaultLoggerName := c.defaultLoggerName
-	c.mu.RUnlock()
+	client.mu.RLock()
+	packet.AddTags(client.context.tags)
+	projectID := client.projectID
+	release := client.release
+	environment := client.environment
+	defaultLoggerName := client.defaultLoggerName
+	client.mu.RUnlock()
 
 	// set the global logger name on the packet if we must
 	if packet.Logger == "" && defaultLoggerName != "" {
@@ -590,7 +590,7 @@ func (c *Client) Capture(packet *Packet, captureTags map[string]string) (eventID
 	err := packet.Init(projectID)
 	if err != nil {
 		ch <- err
-		c.wg.Done()
+		client.wg.Done()
 		return
 	}
 
@@ -606,19 +606,19 @@ func (c *Client) Capture(packet *Packet, captureTags map[string]string) (eventID
 
 	// Lazily start background worker until we
 	// do our first write into the queue.
-	c.start.Do(func() {
-		go c.worker()
+	client.start.Do(func() {
+		go client.worker()
 	})
 
 	select {
-	case c.queue <- outgoingPacket:
+	case client.queue <- outgoingPacket:
 	default:
 		// Send would block, drop the packet
-		if c.DropHandler != nil {
-			c.DropHandler(packet)
+		if client.DropHandler != nil {
+			client.DropHandler(packet)
 		}
 		ch <- ErrPacketDropped
-		c.wg.Done()
+		client.wg.Done()
 	}
 
 	return packet.EventID, ch
@@ -632,17 +632,17 @@ func Capture(packet *Packet, captureTags map[string]string) (eventID string, ch 
 }
 
 // CaptureMessage formats and delivers a string message to the Sentry server.
-func (c *Client) CaptureMessage(message string, tags map[string]string, interfaces ...Interface) string {
-	if c == nil {
+func (client *Client) CaptureMessage(message string, tags map[string]string, interfaces ...Interface) string {
+	if client == nil {
 		return ""
 	}
 
-	if c.shouldExcludeErr(message) {
+	if client.shouldExcludeErr(message) {
 		return ""
 	}
 
-	packet := NewPacket(message, append(append(interfaces, c.context.interfaces()...), &Message{message, nil})...)
-	eventID, _ := c.Capture(packet, tags)
+	packet := NewPacket(message, append(append(interfaces, client.context.interfaces()...), &Message{message, nil})...)
+	eventID, _ := client.Capture(packet, tags)
 
 	return eventID
 }
@@ -653,17 +653,17 @@ func CaptureMessage(message string, tags map[string]string, interfaces ...Interf
 }
 
 // CaptureMessageAndWait is identical to CaptureMessage except it blocks and waits for the message to be sent.
-func (c *Client) CaptureMessageAndWait(message string, tags map[string]string, interfaces ...Interface) string {
-	if c == nil {
+func (client *Client) CaptureMessageAndWait(message string, tags map[string]string, interfaces ...Interface) string {
+	if client == nil {
 		return ""
 	}
 
-	if c.shouldExcludeErr(message) {
+	if client.shouldExcludeErr(message) {
 		return ""
 	}
 
-	packet := NewPacket(message, append(append(interfaces, c.context.interfaces()...), &Message{message, nil})...)
-	eventID, ch := c.Capture(packet, tags)
+	packet := NewPacket(message, append(append(interfaces, client.context.interfaces()...), &Message{message, nil})...)
+	eventID, ch := client.Capture(packet, tags)
 	if eventID != "" {
 		<-ch
 	}
@@ -678,8 +678,8 @@ func CaptureMessageAndWait(message string, tags map[string]string, interfaces ..
 
 // CaptureErrors formats and delivers an error to the Sentry server.
 // Adds a stacktrace to the packet, excluding the call to this method.
-func (c *Client) CaptureError(err error, tags map[string]string, interfaces ...Interface) string {
-	if c == nil {
+func (client *Client) CaptureError(err error, tags map[string]string, interfaces ...Interface) string {
+	if client == nil {
 		return ""
 	}
 
@@ -687,15 +687,15 @@ func (c *Client) CaptureError(err error, tags map[string]string, interfaces ...I
 		return ""
 	}
 
-	if c.shouldExcludeErr(err.Error()) {
+	if client.shouldExcludeErr(err.Error()) {
 		return ""
 	}
 
 	extra := extractExtra(err)
 	cause := pkgErrors.Cause(err)
 
-	packet := NewPacketWithExtra(err.Error(), extra, append(append(interfaces, c.context.interfaces()...), NewException(cause, GetOrNewStacktrace(cause, 1, 3, c.includePaths)))...)
-	eventID, _ := c.Capture(packet, tags)
+	packet := NewPacketWithExtra(err.Error(), extra, append(append(interfaces, client.context.interfaces()...), NewException(cause, GetOrNewStacktrace(cause, 1, 3, client.includePaths)))...)
+	eventID, _ := client.Capture(packet, tags)
 
 	return eventID
 }
@@ -707,20 +707,20 @@ func CaptureError(err error, tags map[string]string, interfaces ...Interface) st
 }
 
 // CaptureErrorAndWait is identical to CaptureError, except it blocks and assures that the event was sent
-func (c *Client) CaptureErrorAndWait(err error, tags map[string]string, interfaces ...Interface) string {
-	if c == nil {
+func (client *Client) CaptureErrorAndWait(err error, tags map[string]string, interfaces ...Interface) string {
+	if client == nil {
 		return ""
 	}
 
-	if c.shouldExcludeErr(err.Error()) {
+	if client.shouldExcludeErr(err.Error()) {
 		return ""
 	}
 
 	extra := extractExtra(err)
 	cause := pkgErrors.Cause(err)
 
-	packet := NewPacketWithExtra(err.Error(), extra, append(append(interfaces, c.context.interfaces()...), NewException(cause, GetOrNewStacktrace(cause, 1, 3, c.includePaths)))...)
-	eventID, ch := c.Capture(packet, tags)
+	packet := NewPacketWithExtra(err.Error(), extra, append(append(interfaces, client.context.interfaces()...), NewException(cause, GetOrNewStacktrace(cause, 1, 3, client.includePaths)))...)
+	eventID, ch := client.Capture(packet, tags)
 	if eventID != "" {
 		<-ch
 	}
@@ -735,8 +735,8 @@ func CaptureErrorAndWait(err error, tags map[string]string, interfaces ...Interf
 
 // CapturePanic calls f and then recovers and reports a panic to the Sentry server if it occurs.
 // If an error is captured, both the error and the reported Sentry error ID are returned.
-func (c *Client) CapturePanic(f func(), tags map[string]string, interfaces ...Interface) (err interface{}, errorID string) {
-	// Note: This doesn't need to check for c, because we still want to go through the defer/recover path
+func (client *Client) CapturePanic(f func(), tags map[string]string, interfaces ...Interface) (err interface{}, errorID string) {
+	// Note: This doesn't need to check for client, because we still want to go through the defer/recover path
 	// Down the line, Capture will be noop'd, so while this does a _tiny_ bit of overhead constructing the
 	// *Packet just to be thrown away, this should not be the normal case. Could be refactored to
 	// be completely noop though if we cared.
@@ -747,19 +747,19 @@ func (c *Client) CapturePanic(f func(), tags map[string]string, interfaces ...In
 		case nil:
 			return
 		case error:
-			if c.shouldExcludeErr(rval.Error()) {
+			if client.shouldExcludeErr(rval.Error()) {
 				return
 			}
-			packet = NewPacket(rval.Error(), append(append(interfaces, c.context.interfaces()...), NewException(rval, NewStacktrace(2, 3, c.includePaths)))...)
+			packet = NewPacket(rval.Error(), append(append(interfaces, client.context.interfaces()...), NewException(rval, NewStacktrace(2, 3, client.includePaths)))...)
 		default:
 			rvalStr := fmt.Sprint(rval)
-			if c.shouldExcludeErr(rvalStr) {
+			if client.shouldExcludeErr(rvalStr) {
 				return
 			}
-			packet = NewPacket(rvalStr, append(append(interfaces, c.context.interfaces()...), NewException(errors.New(rvalStr), NewStacktrace(2, 3, c.includePaths)))...)
+			packet = NewPacket(rvalStr, append(append(interfaces, client.context.interfaces()...), NewException(errors.New(rvalStr), NewStacktrace(2, 3, client.includePaths)))...)
 		}
 
-		errorID, _ = c.Capture(packet, tags)
+		errorID, _ = client.Capture(packet, tags)
 	}()
 
 	f()
@@ -773,8 +773,8 @@ func CapturePanic(f func(), tags map[string]string, interfaces ...Interface) (in
 }
 
 // CapturePanicAndWait is identical to CaptureError, except it blocks and assures that the event was sent
-func (c *Client) CapturePanicAndWait(f func(), tags map[string]string, interfaces ...Interface) (err interface{}, errorID string) {
-	// Note: This doesn't need to check for c, because we still want to go through the defer/recover path
+func (client *Client) CapturePanicAndWait(f func(), tags map[string]string, interfaces ...Interface) (err interface{}, errorID string) {
+	// Note: This doesn't need to check for client, because we still want to go through the defer/recover path
 	// Down the line, Capture will be noop'd, so while this does a _tiny_ bit of overhead constructing the
 	// *Packet just to be thrown away, this should not be the normal case. Could be refactored to
 	// be completely noop though if we cared.
@@ -785,20 +785,20 @@ func (c *Client) CapturePanicAndWait(f func(), tags map[string]string, interface
 		case nil:
 			return
 		case error:
-			if c.shouldExcludeErr(rval.Error()) {
+			if client.shouldExcludeErr(rval.Error()) {
 				return
 			}
-			packet = NewPacket(rval.Error(), append(append(interfaces, c.context.interfaces()...), NewException(rval, NewStacktrace(2, 3, c.includePaths)))...)
+			packet = NewPacket(rval.Error(), append(append(interfaces, client.context.interfaces()...), NewException(rval, NewStacktrace(2, 3, client.includePaths)))...)
 		default:
 			rvalStr := fmt.Sprint(rval)
-			if c.shouldExcludeErr(rvalStr) {
+			if client.shouldExcludeErr(rvalStr) {
 				return
 			}
-			packet = NewPacket(rvalStr, append(append(interfaces, c.context.interfaces()...), NewException(errors.New(rvalStr), NewStacktrace(2, 3, c.includePaths)))...)
+			packet = NewPacket(rvalStr, append(append(interfaces, client.context.interfaces()...), NewException(errors.New(rvalStr), NewStacktrace(2, 3, client.includePaths)))...)
 		}
 
 		var ch chan error
-		errorID, ch = c.Capture(packet, tags)
+		errorID, ch = client.Capture(packet, tags)
 		if errorID != "" {
 			<-ch
 		}
@@ -813,63 +813,63 @@ func CapturePanicAndWait(f func(), tags map[string]string, interfaces ...Interfa
 	return DefaultClient.CapturePanicAndWait(f, tags, interfaces...)
 }
 
-func (c *Client) Close() {
-	close(c.queue)
+func (client *Client) Close() {
+	close(client.queue)
 }
 
 func Close() { DefaultClient.Close() }
 
 // Wait blocks and waits for all events to finish being sent to Sentry server
-func (c *Client) Wait() {
-	c.wg.Wait()
+func (client *Client) Wait() {
+	client.wg.Wait()
 }
 
 // Wait blocks and waits for all events to finish being sent to Sentry server
 func Wait() { DefaultClient.Wait() }
 
-func (c *Client) URL() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func (client *Client) URL() string {
+	client.mu.RLock()
+	defer client.mu.RUnlock()
 
-	return c.url
+	return client.url
 }
 
 func URL() string { return DefaultClient.URL() }
 
-func (c *Client) ProjectID() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func (client *Client) ProjectID() string {
+	client.mu.RLock()
+	defer client.mu.RUnlock()
 
-	return c.projectID
+	return client.projectID
 }
 
 func ProjectID() string { return DefaultClient.ProjectID() }
 
-func (c *Client) Release() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func (client *Client) Release() string {
+	client.mu.RLock()
+	defer client.mu.RUnlock()
 
-	return c.release
+	return client.release
 }
 
 func Release() string { return DefaultClient.Release() }
 
 func IncludePaths() []string { return DefaultClient.IncludePaths() }
 
-func (c *Client) IncludePaths() []string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func (client *Client) IncludePaths() []string {
+	client.mu.RLock()
+	defer client.mu.RUnlock()
 
-	return c.includePaths
+	return client.includePaths
 }
 
 func SetIncludePaths(p []string) { DefaultClient.SetIncludePaths(p) }
 
-func (c *Client) SetIncludePaths(p []string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (client *Client) SetIncludePaths(p []string) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
 
-	c.includePaths = p
+	client.includePaths = p
 }
 
 func (c *Client) SetUserContext(u *User) {
