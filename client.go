@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/rs/zerolog/log"
 	"io"
 	"io/ioutil"
 	mrand "math/rand"
@@ -695,7 +696,13 @@ func (client *Client) CaptureError(err error, tags map[string]string, interfaces
 	cause := pkgErrors.Cause(err)
 
 	packet := NewPacketWithExtra(err.Error(), extra, append(append(interfaces, client.context.interfaces()...), NewException(cause, GetOrNewStacktrace(cause, 1, 3, client.includePaths)))...)
-	eventID, _ := client.Capture(packet, tags)
+	eventID, citrus := client.Capture(packet, tags)
+	go func() {
+		e := <-citrus
+		if e != nil {
+			log.Error().Err(e).Msg("Failed to CaptureError")
+		}
+	}()
 
 	return eventID
 }
