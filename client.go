@@ -334,7 +334,7 @@ func (c *context) interfaces() []Interface {
 var MaxQueueBuffer = 100
 
 func newTransport() Transport {
-	return &HTTPTransport{}
+	return &HTTPTransport{&http.Client{}}
 }
 
 func newClient(tags map[string]string) *Client {
